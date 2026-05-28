@@ -218,6 +218,57 @@ let profile = {
 let merchantQrImage = ""; // In-memory container for owner uploaded Base64 QR Image
 let merchantLogoImage = ""; // In-memory container for owner uploaded Base64 Logo Image
 
+interface SimulatedEmail {
+  id: string;
+  orderId: string;
+  recipientEmail: string;
+  recipientName: string;
+  subject: string;
+  body: string;
+  timestamp: string;
+  status: 'Baking' | 'Ready';
+}
+
+let simulatedEmails: SimulatedEmail[] = [
+  {
+    id: "EML-109283",
+    orderId: "001",
+    recipientEmail: "marcus@philosophy.org",
+    recipientName: "Marcus Aurelius",
+    subject: "🧁 Cooking in Progress: Order #001 is in the Brick Oven!",
+    body: "Dear Marcus Aurelius,\n\nWe are absolutely thrilled to inform you that your bakery reservation (Order ID: #001) has officially transitioned to the baking room!\n\nChef Camille and the team are handcrafting your delicious crinkles/pastries right now. We use only premium Dutch cocoa, real dark chocolate cores, and standard rich mountain pasture-raised butter. Your order is being baked soft, chewy, and not too sweet just the way you love it.\n\nOrder Details:\n- Items: Classic Fudge Powdered Crinkles (x1), Brioche Velvet Loaf (x1)\n- Scheduled Delivery/Pickup Date: 2026-05-22\n- Special Chef Requests: Please label containing gluten details\n\nYou can track the live baking temperature and logistics state via our online Track Orders page when logged into your Loyalty Customer account.\n\nWarmest regards,\nCamille Sumaya Marasigan\nFounder & Master Baker, Zoe's Bake My Dream",
+    timestamp: new Date(Date.now() - 3600000 * 4).toLocaleString(),
+    status: "Baking"
+  }
+];
+
+interface Inquiry {
+  id: string;
+  name: string;
+  email: string;
+  message: string;
+  date: string;
+  inspirationImage?: string;
+  read?: boolean;
+}
+
+let inquiries: Inquiry[] = [
+  {
+    id: "INQ-001",
+    name: "Eleanor Vance",
+    email: "eleanor@gmail.com",
+    message: "Hi Camille! Do you do custom tier-wedding cakes for September? We would love a custom brioche cake base with lavender cream.",
+    date: "2026-05-25"
+  },
+  {
+    id: "INQ-002",
+    name: "Arthur Pendragon",
+    email: "arthur@camelot.co",
+    message: "Greetings, I wanted to inquire about bulk pastry discounts for an office catering layout. Around 50 savory rolls, please.",
+    date: "2026-05-26"
+  }
+];
+
 // --- JSON Persistence implementation ---
 const DB_FILE = path.join(process.cwd(), "db.json");
 
@@ -272,13 +323,14 @@ async function saveToSupabaseCloud() {
       });
 
     if (error) {
-      if (error.code === "42P01") {
+      if (error.code === "42P01" || error.message?.includes("Could not find the table") || error.message?.includes("does not exist")) {
         supabaseStatus = "table_missing";
+        console.warn("ℹ️ Supabase 'bakery_state' table not found on cloud database cluster. Operating in self-healing local mode.");
       } else {
         supabaseStatus = "disconnected";
         supabaseErrorDetail = error.message;
+        console.error("❌ Failed to sync to Supabase Cloud:", error.message);
       }
-      console.error("❌ Failed to sync to Supabase Cloud:", error.message);
     } else {
       supabaseStatus = "connected";
       supabaseErrorDetail = "";
@@ -384,9 +436,9 @@ async function loadFromDatabase() {
         .maybeSingle();
 
       if (error) {
-        if (error.code === "42P01") {
+        if (error.code === "42P01" || error.message?.includes("Could not find the table") || error.message?.includes("does not exist")) {
           supabaseStatus = "table_missing";
-          console.warn("⚠️ Supabase 'bakery_state' table missing. Operating in self-healing local mode.");
+          console.warn("ℹ️ Supabase 'bakery_state' table missing. Operating in self-healing local mode (db.json). Setup SQL blueprint is available in the Admin Dashboard.");
         } else {
           supabaseStatus = "disconnected";
           supabaseErrorDetail = error.message;
@@ -699,57 +751,6 @@ app.post("/api/orders", (req, res) => {
   saveToDatabase();
   res.status(201).json(newOrder);
 });
-
-interface SimulatedEmail {
-  id: string;
-  orderId: string;
-  recipientEmail: string;
-  recipientName: string;
-  subject: string;
-  body: string;
-  timestamp: string;
-  status: 'Baking' | 'Ready';
-}
-
-let simulatedEmails: SimulatedEmail[] = [
-  {
-    id: "EML-109283",
-    orderId: "001",
-    recipientEmail: "marcus@philosophy.org",
-    recipientName: "Marcus Aurelius",
-    subject: "🧁 Cooking in Progress: Order #001 is in the Brick Oven!",
-    body: "Dear Marcus Aurelius,\n\nWe are absolutely thrilled to inform you that your bakery reservation (Order ID: #001) has officially transitioned to the baking room!\n\nChef Camille and the team are handcrafting your delicious crinkles/pastries right now. We use only premium Dutch cocoa, real dark chocolate cores, and standard rich mountain pasture-raised butter. Your order is being baked soft, chewy, and not too sweet just the way you love it.\n\nOrder Details:\n- Items: Classic Fudge Powdered Crinkles (x1), Brioche Velvet Loaf (x1)\n- Scheduled Delivery/Pickup Date: 2026-05-22\n- Special Chef Requests: Please label containing gluten details\n\nYou can track the live baking temperature and logistics state via our online Track Orders page when logged into your Loyalty Customer account.\n\nWarmest regards,\nCamille Sumaya Marasigan\nFounder & Master Baker, Zoe's Bake My Dream",
-    timestamp: new Date(Date.now() - 3600000 * 4).toLocaleString(),
-    status: "Baking"
-  }
-];
-
-interface Inquiry {
-  id: string;
-  name: string;
-  email: string;
-  message: string;
-  date: string;
-  inspirationImage?: string;
-  read?: boolean;
-}
-
-let inquiries: Inquiry[] = [
-  {
-    id: "INQ-001",
-    name: "Eleanor Vance",
-    email: "eleanor@gmail.com",
-    message: "Hi Camille! Do you do custom tier-wedding cakes for September? We would love a custom brioche cake base with lavender cream.",
-    date: "2026-05-25"
-  },
-  {
-    id: "INQ-002",
-    name: "Arthur Pendragon",
-    email: "arthur@camelot.co",
-    message: "Greetings, I wanted to inquire about bulk pastry discounts for an office catering layout. Around 50 savory rolls, please.",
-    date: "2026-05-26"
-  }
-];
 
 function sendSimulatedStatusEmail(order: any, targetStatus: 'Baking' | 'Ready') {
   const emailId = 'EML-' + Math.floor(100000 + Math.random() * 900000);
