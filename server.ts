@@ -336,13 +336,22 @@ async function saveToSupabaseCloud() {
       nextOrderIdSeq
     };
 
-    const { error } = await supabaseClient
+    const upsertPromise = supabaseClient
       .from("bakery_state")
       .upsert({ 
         id: "current_state", 
         data: statePayload, 
         updated_at: new Date().toISOString() 
       });
+
+    const timeoutPromise = new Promise<any>((_, reject) => {
+      setTimeout(() => reject(new Error("Supabase statement upsert timed out after 4500ms")), 4500);
+    });
+
+    const { error } = await Promise.race([
+      upsertPromise,
+      timeoutPromise
+    ]);
 
     if (error) {
       if (error.code === "42P01" || error.message?.includes("Could not find the table") || error.message?.includes("does not exist")) {
@@ -414,8 +423,12 @@ function runOrderSafeguards() {
   }
 }
 
-async function loadFromDatabase() {
-  // First, baseline read from local db.json to ensure fastest start
+let isLocalLoaded = false;
+let isSupabaseLoaded = false;
+let isCloudLoadingSyncStarted = false;
+
+function loadLocalBaselineSync() {
+  if (isLocalLoaded) return;
   try {
     if (DB_FILE && fs.existsSync(DB_FILE)) {
       const dbContent = fs.readFileSync(DB_FILE, "utf-8").trim();
@@ -447,15 +460,32 @@ async function loadFromDatabase() {
       products = JSON.parse(fs.readFileSync(defaultProductsPath, "utf-8"));
     } catch (_) {}
   }
+  isLocalLoaded = true;
+  runOrderSafeguards();
+}
 
-  // Load from Supabase Cloud if connection is configured
-  if (supabaseClient) {
+function loadFromSupabaseAsync() {
+  if (!supabaseClient || isSupabaseLoaded || isCloudLoadingSyncStarted) return;
+  isCloudLoadingSyncStarted = true;
+
+  // Run in background without blocking express event loops
+  (async () => {
     try {
-      const { data, error } = await supabaseClient
+      // Create a promise with a safety timeout of 3.5 seconds
+      const fetchPromise = supabaseClient
         .from("bakery_state")
         .select("*")
         .eq("id", "current_state")
         .maybeSingle();
+
+      const timeoutPromise = new Promise<{ data: any; error: any }>((_, reject) => {
+        setTimeout(() => reject(new Error("Supabase statement lookup timed out after 3500ms")), 3500);
+      });
+
+      const { data, error } = await Promise.race([
+        fetchPromise,
+        timeoutPromise
+      ]) as any;
 
       if (error) {
         if (error.code === "42P01" || error.message?.includes("Could not find the table") || error.message?.includes("does not exist")) {
@@ -464,10 +494,9 @@ async function loadFromDatabase() {
         } else {
           supabaseStatus = "disconnected";
           supabaseErrorDetail = error.message;
-          console.error("⚠️ Supabase server query error during startup:", error.message);
+          console.error("⚠️ Supabase query completed with error:", error.message);
         }
       } else if (data && data.data) {
-        // Successfully loaded from Supabase! Let's reconcile!
         const cloudData = data.data;
         console.log("☁️ Successfully connected to Supabase Cloud and synchronized master state.");
         
@@ -488,6 +517,7 @@ async function loadFromDatabase() {
         supabaseStatus = "connected";
         supabaseErrorDetail = "";
         lastSyncTime = new Date().toISOString();
+        isSupabaseLoaded = true;
 
         // Write local mirror backup copy
         saveToLocalDatabaseFile();
@@ -495,36 +525,24 @@ async function loadFromDatabase() {
         // Connected but table is empty. Populate table with current local copy to build state.
         console.log("☁️ Supabase Cloud is initialized but blank. Syncing current state uphill...");
         supabaseStatus = "connected";
+        isSupabaseLoaded = true;
         await saveToSupabaseCloud();
       }
     } catch (err: any) {
       supabaseStatus = "disconnected";
       supabaseErrorDetail = err?.message || String(err);
-      console.error("🔌 Exception during Supabase initialization sync:", err);
+      console.error("🔌 Supabase background initialization failed or timed out:", err?.message || err);
+    } finally {
+      isCloudLoadingSyncStarted = false;
     }
-  }
-
-  // Finally run order checks
-  runOrderSafeguards();
+  })();
 }
 
-// Lazy database initialization for Vercel Serverless environment
-let isDatabaseStateLoaded = false;
-let databaseLoadPromise: Promise<void> | null = null;
-
 async function ensureDatabaseLoaded() {
-  if (isDatabaseStateLoaded) return;
-  if (!databaseLoadPromise) {
-    databaseLoadPromise = (async () => {
-      try {
-        await loadFromDatabase();
-        isDatabaseStateLoaded = true;
-      } catch (err) {
-        console.error("🚨 Error in lazy database load handler:", err);
-      }
-    })();
+  loadLocalBaselineSync();
+  if (supabaseClient && !isSupabaseLoaded) {
+    loadFromSupabaseAsync();
   }
-  await databaseLoadPromise;
 }
 
 // Global middleware to await DB load for all API requests
