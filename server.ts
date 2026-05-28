@@ -270,7 +270,24 @@ let inquiries: Inquiry[] = [
 ];
 
 // --- JSON Persistence implementation ---
-const DB_FILE = path.join(process.cwd(), "db.json");
+const DB_FILE = (() => {
+  if (process.env.VERCEL) {
+    const tmpPath = path.join("/tmp", "db.json");
+    if (!fs.existsSync(tmpPath)) {
+      const bundledPath = path.join(process.cwd(), "db.json");
+      if (fs.existsSync(bundledPath)) {
+        try {
+          fs.copyFileSync(bundledPath, tmpPath);
+          console.log("💾 Seeded writable /tmp/db.json from bundled database cache.");
+        } catch (e) {
+          console.warn("Could not copy bundled db.json to /tmp:", e);
+        }
+      }
+    }
+    return tmpPath;
+  }
+  return path.join(process.cwd(), "db.json");
+})();
 
 function saveToLocalDatabaseFile() {
   try {
@@ -1103,4 +1120,8 @@ async function startServer() {
   });
 }
 
-startServer();
+if (!process.env.VERCEL) {
+  startServer();
+}
+
+export default app;
