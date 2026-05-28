@@ -479,8 +479,7 @@ Thank you for your business!
           { id: 'analytics', label: 'Visual Analytics' },
           { id: 'website', label: 'Edit Narratives' },
           { id: 'testimonials', label: 'Patrons Feedbacks' },
-          { id: 'qr_settings', label: 'Logo, QR & Emails' },
-          { id: 'database_status', label: 'Database Health & Vercel Sync' }
+          { id: 'qr_settings', label: 'Logo, QR & Emails' }
         ].map((subTab) => (
           <button
             key={subTab.id}
@@ -1830,8 +1829,8 @@ Thank you for your business!
         </div>
       )}
 
-      {/* Tab: Self Healing Database Diagnostics Center */}
-      {activeSubTab === 'database_status' && (
+      {/* Tab: Self Healing Database Diagnostics Center (removed) */}
+      {false && (
         <div className="space-y-8 font-sans text-xs">
           
           <div className="bg-white rounded-3xl border border-[#E8DCCF]/50 p-6 sm:p-8 shadow-sm flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
