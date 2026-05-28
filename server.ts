@@ -375,15 +375,17 @@ async function saveToSupabaseCloud() {
   }
 }
 
-function saveToDatabase() {
+async function saveToDatabase() {
   // Always trigger instant local persist
   saveToLocalDatabaseFile();
   
-  // Fire-and-forget backoff async sync to Supabase
+  // Await the cloud save so serverless platforms don't freeze the environment before it finishes
   if (supabaseClient) {
-    saveToSupabaseCloud().catch(err => {
-      console.error("Asynchronous Supabase connection save threw exception:", err);
-    });
+    try {
+      await saveToSupabaseCloud();
+    } catch (err) {
+      console.error("Supabase connection save threw exception:", err);
+    }
   }
 }
 
@@ -425,7 +427,7 @@ function runOrderSafeguards() {
 
 let isLocalLoaded = false;
 let isSupabaseLoaded = false;
-let isCloudLoadingSyncStarted = false;
+let supabaseLoadingPromise: Promise<void> | null = null;
 
 function loadLocalBaselineSync() {
   if (isLocalLoaded) return;
@@ -464,12 +466,14 @@ function loadLocalBaselineSync() {
   runOrderSafeguards();
 }
 
-function loadFromSupabaseAsync() {
-  if (!supabaseClient || isSupabaseLoaded || isCloudLoadingSyncStarted) return;
-  isCloudLoadingSyncStarted = true;
+async function loadFromSupabase() {
+  if (!supabaseClient || isSupabaseLoaded) return;
 
-  // Run in background without blocking express event loops
-  (async () => {
+  if (supabaseLoadingPromise) {
+    return supabaseLoadingPromise;
+  }
+
+  supabaseLoadingPromise = (async () => {
     try {
       // Create a promise with a safety timeout of 3.5 seconds
       const fetchPromise = supabaseClient
@@ -533,15 +537,17 @@ function loadFromSupabaseAsync() {
       supabaseErrorDetail = err?.message || String(err);
       console.error("🔌 Supabase background initialization failed or timed out:", err?.message || err);
     } finally {
-      isCloudLoadingSyncStarted = false;
+      supabaseLoadingPromise = null;
     }
   })();
+
+  return supabaseLoadingPromise;
 }
 
 async function ensureDatabaseLoaded() {
   loadLocalBaselineSync();
   if (supabaseClient && !isSupabaseLoaded) {
-    loadFromSupabaseAsync();
+    await loadFromSupabase();
   }
 }
 
@@ -663,7 +669,7 @@ app.get("/api/products", (req, res) => {
 });
 
 // POST New Product
-app.post("/api/products", (req, res) => {
+app.post("/api/products", async (req, res) => {
   const { name, category, description, price, image, available, isFeatured, stock } = req.body;
   if (!name || isNaN(price)) {
     return res.status(400).json({ error: "Invalid product parameters." });
@@ -680,12 +686,12 @@ app.post("/api/products", (req, res) => {
     stock: stock !== undefined ? parseInt(stock) : 40
   };
   products = [newProduct, ...products];
-  saveToDatabase();
+  await saveToDatabase();
   res.status(201).json(newProduct);
 });
 
 // PUT Product modification
-app.put("/api/products/:id", (req, res) => {
+app.put("/api/products/:id", async (req, res) => {
   const { id } = req.params;
   const index = products.findIndex(p => p.id === id);
   if (index === -1) {
@@ -703,15 +709,15 @@ app.put("/api/products/:id", (req, res) => {
     isFeatured: req.body.isFeatured !== undefined ? req.body.isFeatured : current.isFeatured,
     stock: req.body.stock !== undefined ? parseInt(req.body.stock) : (current.stock !== undefined ? current.stock : 40)
   };
-  saveToDatabase();
+  await saveToDatabase();
   res.json(products[index]);
 });
 
 // DELETE Product
-app.delete("/api/products/:id", (req, res) => {
+app.delete("/api/products/:id", async (req, res) => {
   const { id } = req.params;
   products = products.filter(p => p.id !== id);
-  saveToDatabase();
+  await saveToDatabase();
   res.json({ success: true });
 });
 
@@ -721,7 +727,7 @@ app.get("/api/ingredients", (req, res) => {
 });
 
 // POST Create new raw ingredient
-app.post("/api/ingredients", (req, res) => {
+app.post("/api/ingredients", async (req, res) => {
   const { name, stock, unit, minThreshold } = req.body;
   if (!name || stock === undefined || !unit || minThreshold === undefined) {
     return res.status(400).json({ error: "Missing required ingredient fields" });
@@ -734,24 +740,24 @@ app.post("/api/ingredients", (req, res) => {
     minThreshold: parseFloat(minThreshold) || 0
   };
   ingredients.push(newIng);
-  saveToDatabase();
+  await saveToDatabase();
   res.json(newIng);
 });
 
 // DELETE raw ingredient reference
-app.delete("/api/ingredients/:id", (req, res) => {
+app.delete("/api/ingredients/:id", async (req, res) => {
   const { id } = req.params;
   const index = ingredients.findIndex(i => i.id === id);
   if (index === -1) {
     return res.status(404).json({ error: "Ingredient not found" });
   }
   const deleted = ingredients.splice(index, 1)[0];
-  saveToDatabase();
+  await saveToDatabase();
   res.json(deleted);
 });
 
 // PUT Update raw ingredient stock
-app.put("/api/ingredients/:id", (req, res) => {
+app.put("/api/ingredients/:id", async (req, res) => {
   const { id } = req.params;
   const { stock, minThreshold } = req.body;
   const index = ingredients.findIndex(i => i.id === id);
@@ -760,7 +766,7 @@ app.put("/api/ingredients/:id", (req, res) => {
   }
   if (stock !== undefined) ingredients[index].stock = parseFloat(stock);
   if (minThreshold !== undefined) ingredients[index].minThreshold = parseFloat(minThreshold);
-  saveToDatabase();
+  await saveToDatabase();
   res.json(ingredients[index]);
 });
 
@@ -770,7 +776,7 @@ app.get("/api/orders", (req, res) => {
 });
 
 // POST Place New Pre-Order
-app.post("/api/orders", (req, res) => {
+app.post("/api/orders", async (req, res) => {
   const { customerName, email, phone, items, deliveryOption, date, total, specialRequests, paymentReference, paymentChannel, deliveryAddress, landmark } = req.body;
   if (!customerName || !email || !items || !items.length) {
     return res.status(400).json({ error: "Incomplete pre-order details." });
@@ -816,7 +822,7 @@ app.post("/api/orders", (req, res) => {
     landmark: landmark || ''
   };
   orders = [newOrder, ...orders];
-  saveToDatabase();
+  await saveToDatabase();
   res.status(201).json(newOrder);
 });
 
@@ -873,7 +879,7 @@ function sendSimulatedStatusEmail(order: any, targetStatus: 'Baking' | 'Ready') 
 }
 
 // PUT Recalculate/Update General Order details
-app.put("/api/orders/:id", (req, res) => {
+app.put("/api/orders/:id", async (req, res) => {
   const { id } = req.params;
   const { items, deliveryFee } = req.body;
   const index = orders.findIndex(o => o.id === id);
@@ -895,24 +901,24 @@ app.put("/api/orders/:id", (req, res) => {
   const itemsTotal = order.items.reduce((sum, item) => sum + (item.price * item.quantity), 0);
   order.total = (itemsTotal * 1.05) + (order.deliveryFee || 0);
 
-  saveToDatabase();
+  await saveToDatabase();
   res.json(order);
 });
 
 // DELETE Order permanently
-app.delete("/api/orders/:id", (req, res) => {
+app.delete("/api/orders/:id", async (req, res) => {
   const { id } = req.params;
   const index = orders.findIndex(o => o.id === id);
   if (index === -1) {
     return res.status(404).json({ error: "Order not found" });
   }
   const deletedOrder = orders.splice(index, 1)[0];
-  saveToDatabase();
+  await saveToDatabase();
   res.json({ success: true, message: `Order ${id} removed successfully`, deletedOrder });
 });
 
 // PUT Update Order fulfillment status
-app.put("/api/orders/:id/status", (req, res) => {
+app.put("/api/orders/:id/status", async (req, res) => {
   const { id } = req.params;
   const { status } = req.body;
   const index = orders.findIndex(o => o.id === id);
@@ -943,7 +949,7 @@ app.put("/api/orders/:id/status", (req, res) => {
     sendSimulatedStatusEmail(orders[index], status);
   }
 
-  saveToDatabase();
+  await saveToDatabase();
   res.json(orders[index]);
 });
 
@@ -958,7 +964,7 @@ app.get("/api/inquiries", (req, res) => {
 });
 
 // POST submit a new inquiry
-app.post("/api/inquiries", (req, res) => {
+app.post("/api/inquiries", async (req, res) => {
   const { name, email, message, inspirationImage } = req.body;
   if (!name || !email || !message) {
     return res.status(400).json({ error: "Missing required inquiry fields" });
@@ -975,17 +981,17 @@ app.post("/api/inquiries", (req, res) => {
   };
 
   inquiries.unshift(newInquiry);
-  saveToDatabase();
+  await saveToDatabase();
   res.json(newInquiry);
 });
 
 // PUT mark inquiry as read
-app.put("/api/inquiries/:id/read", (req, res) => {
+app.put("/api/inquiries/:id/read", async (req, res) => {
   const { id } = req.params;
   const inq = inquiries.find(i => i.id === id);
   if (inq) {
     inq.read = true;
-    saveToDatabase();
+    await saveToDatabase();
     return res.json({ success: true, inquiry: inq });
   }
   res.status(404).json({ error: "Inquiry not found" });
@@ -997,10 +1003,10 @@ app.get("/api/payment/qr", (req, res) => {
 });
 
 // POST Upload custom Merchant/Owner Payment QR
-app.post("/api/payment/qr", (req, res) => {
+app.post("/api/payment/qr", async (req, res) => {
   const { qrImage } = req.body;
   merchantQrImage = qrImage || "";
-  saveToDatabase();
+  await saveToDatabase();
   res.json({ success: true, qrImage: merchantQrImage });
 });
 
@@ -1010,10 +1016,10 @@ app.get("/api/website/logo", (req, res) => {
 });
 
 // POST Upload custom website logo
-app.post("/api/website/logo", (req, res) => {
+app.post("/api/website/logo", async (req, res) => {
   const { logoImage } = req.body;
   merchantLogoImage = logoImage || "";
-  saveToDatabase();
+  await saveToDatabase();
   res.json({ success: true, logoImage: merchantLogoImage });
 });
 
@@ -1029,19 +1035,19 @@ app.get("/api/website", (req, res) => {
 });
 
 // PUT Update Website editorials/promos/meta
-app.put("/api/website", (req, res) => {
+app.put("/api/website", async (req, res) => {
   const { updatedStory, updatedAddress, updatedProfile, updatedPromotion, updatedTestimonials } = req.body;
   if (updatedStory) story = { ...story, ...updatedStory };
   if (updatedAddress) address = { ...address, ...updatedAddress };
   if (updatedProfile) profile = { ...profile, ...updatedProfile };
   if (updatedPromotion) promotion = { ...promotion, ...updatedPromotion };
   if (updatedTestimonials) testimonials = updatedTestimonials;
-  saveToDatabase();
+  await saveToDatabase();
   res.json({ success: true, story, address, profile, promotion, testimonials });
 });
 
 // POST Create new customer testimonial / feedback review
-app.post("/api/testimonials", (req, res) => {
+app.post("/api/testimonials", async (req, res) => {
   const { name, rating, text, role } = req.body;
   if (!name || !text || rating === undefined) {
     return res.status(400).json({ error: "Missing required review fields (name, rating, text)" });
@@ -1061,7 +1067,7 @@ app.post("/api/testimonials", (req, res) => {
     ][Math.floor(Math.random() * 5)]}?auto=format&fit=crop&w=120&q=80`
   };
   testimonials.unshift(newTestimonial);
-  saveToDatabase();
+  await saveToDatabase();
   res.json({ success: true, testimonials, newTestimonial });
 });
 
