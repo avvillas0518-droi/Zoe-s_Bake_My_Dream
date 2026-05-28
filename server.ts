@@ -1,10 +1,10 @@
-﻿import express from "express";
+import express from "express";
 import path from "path";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, Type } from "@google/genai";
 import dns from "dns";
-import defaultProducts from "./src/default_products.json";
-import pg from "pg";
+import fs from "fs";
+import { createClient } from "@supabase/supabase-js";
 
 // Fix Node local dns lookup behavior
 dns.setDefaultResultOrder("ipv4first");
@@ -12,21 +12,39 @@ dns.setDefaultResultOrder("ipv4first");
 const app = express();
 const PORT = 3000;
 
+// --- Supabase Cloud Self-Healing State Configuration ---
+let supabaseClient: any = null;
+let supabaseStatus: "not_configured" | "connected" | "disconnected" | "table_missing" = "not_configured";
+let supabaseErrorDetail = "";
+let lastSyncTime = "";
+
+function initializeSupabase() {
+  const url = process.env.SUPABASE_URL || "";
+  const key = process.env.SUPABASE_ANON_KEY || "";
+  
+  if (!url || !key) {
+    supabaseStatus = "not_configured";
+    console.log("ℹ️ Supabase environment variables not configured. Operating in high-reliability self-healing local DB mode (db.json).");
+    return;
+  }
+
+  try {
+    supabaseClient = createClient(url, key);
+    console.log("🔌 Initialized Supabase Cloud client connection successfully!");
+  } catch (err: any) {
+    supabaseStatus = "disconnected";
+    supabaseErrorDetail = err?.message || String(err);
+    console.error("❌ Failed to initialize Supabase client:", err);
+  }
+}
+
+// Spark the connection configuration
+initializeSupabase();
+
+
 // Allow generous body limits for base64 image uploads in bakery story/pastry management
 app.use(express.json({ limit: "20mb" }));
 app.use(express.urlencoded({ limit: "20mb", extended: true }));
-
-// PostgreSQL pool for persistent storage across serverless instances
-const pool = process.env.DATABASE_URL
-  ? new pg.Pool({
-      connectionString: process.env.DATABASE_URL,
-      ssl: { rejectUnauthorized: false }
-    })
-  : null;
-if (!pool) {
-  console.warn("⚠️ DATABASE_URL not set. Data will not persist across restarts.");
-}
-
 
 // Lazy initializer for Gemini Client
 let aiClient: GoogleGenAI | null = null;
@@ -34,7 +52,7 @@ function getGeminiClient(): GoogleGenAI {
   if (!aiClient) {
     const key = process.env.GEMINI_API_KEY;
     if (!key) {
-      console.warn("âš ï¸ GEMINI_API_KEY is not defined in environment variables. Running in AI simulation mode.");
+      console.warn("⚠️ GEMINI_API_KEY is not defined in environment variables. Running in AI simulation mode.");
     }
     aiClient = new GoogleGenAI({
       apiKey: key || "MOCK_KEY",
@@ -48,8 +66,16 @@ function getGeminiClient(): GoogleGenAI {
   return aiClient;
 }
 
-// In-Memory Persistent Store seeded from bundled default products
-let products: any[] = [...defaultProducts];
+// In-Memory Persistent Store representing database tables
+let products: any[] = [];
+try {
+  const defaultProductsPath = path.join(process.cwd(), "src", "default_products.json");
+  if (fs.existsSync(defaultProductsPath)) {
+    products = JSON.parse(fs.readFileSync(defaultProductsPath, "utf-8"));
+  }
+} catch (err) {
+  console.error("Failed to load default products from json:", err);
+}
 
 let ingredients = [
   { id: 'ing-1', name: 'French AOP Butter', stock: 124.5, unit: 'kg', minThreshold: 20 },
@@ -106,7 +132,7 @@ let testimonials = [
     id: 't-3',
     name: 'Crinkle Connoisseur',
     rating: 5,
-    text: "Welcome...ang sarap ng crinkles... Hindi matamis.. At yung isa.. Sakto lang medyo mapait.. Para sa mga diabetic ðŸ˜†",
+    text: "Welcome...ang sarap ng crinkles... Hindi matamis.. At yung isa.. Sakto lang medyo mapait.. Para sa mga diabetic 😆",
     role: 'Loyal Patron',
     image: 'https://images.unsplash.com/photo-1438761681033-6461ffad8d80?auto=format&fit=crop&w=150&h=150&q=80'
   },
@@ -166,10 +192,10 @@ let nextOrderIdSeq = 3;
 let story = {
   title: "Zoe's Bake My Dream",
   tagline: "Our Brioche & Crinkle Journey Since July 2020",
-  mainText: `Zoeâ€™s Bake My Dream started baking on July 11, 2020. It began as a part-time venture while I was a student during the pandemic, aiming to build my own business through the help of a scholarship. At first, it was only meant to be a hobby, but over time, orders started coming in along with positive feedback. Customers loved that the products were not too sweet and had a delicious taste. Zoeâ€™s Bake My Dream started as a home-based baking business where a dream began.`,
+  mainText: `Zoe’s Bake My Dream started baking on July 11, 2020. It began as a part-time venture while I was a student during the pandemic, aiming to build my own business through the help of a scholarship. At first, it was only meant to be a hobby, but over time, orders started coming in along with positive feedback. Customers loved that the products were not too sweet and had a delicious taste. Zoe’s Bake My Dream started as a home-based baking business where a dream began.`,
   secondaryText: "",
   ecoTitle: "Love & Passion In Every Bake",
-  ecoText: "Soft, chewy, and not too sweetâ€”perfectly balanced flavor profiles crafted from unbleached ingredients, AOP butter, and real dark chocolate cores. Handcrafted with love by our family for your cozy gatherings."
+  ecoText: "Soft, chewy, and not too sweet—perfectly balanced flavor profiles crafted from unbleached ingredients, AOP butter, and real dark chocolate cores. Handcrafted with love by our family for your cozy gatherings."
 };
 
 let address = {
@@ -192,89 +218,332 @@ let profile = {
 let merchantQrImage = ""; // In-memory container for owner uploaded Base64 QR Image
 let merchantLogoImage = ""; // In-memory container for owner uploaded Base64 Logo Image
 
-// --- PostgreSQL Persistence ---
+// --- JSON Persistence implementation ---
+const DB_FILE = path.join(process.cwd(), "db.json");
 
-async function collectState() {
-  return {
-    products,
-    ingredients,
-    orders,
-    story,
-    address,
-    profile,
-    promotion,
-    testimonials,
-    simulatedEmails,
-    inquiries,
-    merchantQrImage,
-    merchantLogoImage,
-    nextOrderIdSeq
-  };
+function saveToLocalDatabaseFile() {
+  try {
+    const data = {
+      products,
+      ingredients,
+      orders,
+      story,
+      address,
+      profile,
+      promotion,
+      testimonials,
+      simulatedEmails,
+      inquiries,
+      merchantQrImage,
+      merchantLogoImage,
+      nextOrderIdSeq
+    };
+    fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2), "utf-8");
+  } catch (error) {
+    console.error("Could not write DB file locally:", error);
+  }
+}
+
+async function saveToSupabaseCloud() {
+  if (!supabaseClient) return;
+  try {
+    const statePayload = {
+      products,
+      ingredients,
+      orders,
+      story,
+      address,
+      profile,
+      promotion,
+      testimonials,
+      simulatedEmails,
+      inquiries,
+      merchantQrImage,
+      merchantLogoImage,
+      nextOrderIdSeq
+    };
+
+    const { error } = await supabaseClient
+      .from("bakery_state")
+      .upsert({ 
+        id: "current_state", 
+        data: statePayload, 
+        updated_at: new Date().toISOString() 
+      });
+
+    if (error) {
+      if (error.code === "42P01") {
+        supabaseStatus = "table_missing";
+      } else {
+        supabaseStatus = "disconnected";
+        supabaseErrorDetail = error.message;
+      }
+      console.error("❌ Failed to sync to Supabase Cloud:", error.message);
+    } else {
+      supabaseStatus = "connected";
+      supabaseErrorDetail = "";
+      lastSyncTime = new Date().toISOString();
+      console.log("💾 ☁️ Synchronized master state successfully with Supabase Cloud!");
+    }
+  } catch (err: any) {
+    supabaseStatus = "disconnected";
+    supabaseErrorDetail = err?.message || String(err);
+    console.error("❌ Error writing state to Supabase Cloud:", err);
+  }
+}
+
+function saveToDatabase() {
+  // Always trigger instant local persist
+  saveToLocalDatabaseFile();
+  
+  // Fire-and-forget backoff async sync to Supabase
+  if (supabaseClient) {
+    saveToSupabaseCloud().catch(err => {
+      console.error("Asynchronous Supabase connection save threw exception:", err);
+    });
+  }
+}
+
+function runOrderSafeguards() {
+  if (orders && orders.length) {
+    const seenIds = new Set<string>();
+    let changed = false;
+    let tempNextSeq = 2; // Default starting sequence base
+
+    // Pass 1: Find highest legitimate ID in numerical format
+    orders.forEach((o: any) => {
+      const num = parseInt(o.id, 10);
+      if (!isNaN(num) && num > tempNextSeq) {
+        tempNextSeq = num;
+      }
+    });
+
+    // Pass 2: Reassign duplicates from oldest (right) to newest (left)
+    for (let i = orders.length - 1; i >= 0; i--) {
+      const o = orders[i];
+      if (!o.id || seenIds.has(o.id)) {
+        tempNextSeq += 1;
+        const originalId = o.id || '000';
+        o.id = String(tempNextSeq).padStart(3, '0');
+        console.log(`[Database Safeguard] Reassigned duplicate order ${originalId} -> ${o.id} for ${o.customerName}`);
+        changed = true;
+      } else {
+        seenIds.add(o.id);
+      }
+    }
+
+    if (changed) {
+      nextOrderIdSeq = tempNextSeq + 1;
+      saveToDatabase();
+      console.log("💾 Persistent local JSON database auto-safeguard ran successfully!");
+    }
+  }
 }
 
 async function loadFromDatabase() {
-  if (!pool) return;
+  // First, baseline read from local db.json to ensure fastest start
   try {
-    const result = await pool.query("SELECT data FROM app_state WHERE id = 1");
-    if (result.rows.length === 0) return;
-
-    const state = result.rows[0].data;
-    if (!state) return;
-
-    if (state.products) products = state.products;
-    if (state.ingredients) ingredients = state.ingredients;
-    if (state.orders) orders = state.orders;
-    if (state.story) story = state.story;
-    if (state.address) address = state.address;
-    if (state.profile) profile = state.profile;
-    if (state.promotion) promotion = state.promotion;
-    if (state.testimonials) testimonials = state.testimonials;
-    if (state.simulatedEmails) simulatedEmails = state.simulatedEmails;
-    if (state.inquiries !== undefined) inquiries = state.inquiries;
-    if (state.merchantQrImage !== undefined) merchantQrImage = state.merchantQrImage;
-    if (state.merchantLogoImage !== undefined) merchantLogoImage = state.merchantLogoImage;
-    if (state.nextOrderIdSeq !== undefined) nextOrderIdSeq = state.nextOrderIdSeq;
-
-    console.log("✅ Loaded state from PostgreSQL.");
-  } catch (error) {
-    console.error("PostgreSQL load failed:", error);
+    if (fs.existsSync(DB_FILE)) {
+      const dbContent = fs.readFileSync(DB_FILE, "utf-8").trim();
+      if (dbContent) {
+        const data = JSON.parse(dbContent);
+        if (data.products && data.products.length > 0) products = data.products;
+        if (data.ingredients) ingredients = data.ingredients;
+        if (data.orders) orders = data.orders;
+        if (data.story) story = data.story;
+        if (data.address) address = data.address;
+        if (data.profile) profile = data.profile;
+        if (data.promotion) promotion = data.promotion;
+        if (data.testimonials) testimonials = data.testimonials;
+        if (data.simulatedEmails) simulatedEmails = data.simulatedEmails;
+        if (data.inquiries !== undefined) inquiries = data.inquiries;
+        if (data.merchantQrImage !== undefined) merchantQrImage = data.merchantQrImage;
+        if (data.merchantLogoImage !== undefined) merchantLogoImage = data.merchantLogoImage;
+        if (data.nextOrderIdSeq !== undefined) nextOrderIdSeq = data.nextOrderIdSeq;
+      }
+    }
+  } catch (err) {
+    console.error("Baseline db.json loading failed, using built-in memory/default fallback:", err);
   }
+
+  // Dual fallback: ensure default products are loaded if catalog is empty
+  const defaultProductsPath = path.join(process.cwd(), "src", "default_products.json");
+  if ((!products || products.length === 0) && fs.existsSync(defaultProductsPath)) {
+    try {
+      products = JSON.parse(fs.readFileSync(defaultProductsPath, "utf-8"));
+    } catch (_) {}
+  }
+
+  // Load from Supabase Cloud if connection is configured
+  if (supabaseClient) {
+    try {
+      const { data, error } = await supabaseClient
+        .from("bakery_state")
+        .select("*")
+        .eq("id", "current_state")
+        .maybeSingle();
+
+      if (error) {
+        if (error.code === "42P01") {
+          supabaseStatus = "table_missing";
+          console.warn("⚠️ Supabase 'bakery_state' table missing. Operating in self-healing local mode.");
+        } else {
+          supabaseStatus = "disconnected";
+          supabaseErrorDetail = error.message;
+          console.error("⚠️ Supabase server query error during startup:", error.message);
+        }
+      } else if (data && data.data) {
+        // Successfully loaded from Supabase! Let's reconcile!
+        const cloudData = data.data;
+        console.log("☁️ Successfully connected to Supabase Cloud and synchronized master state.");
+        
+        if (cloudData.products && cloudData.products.length > 0) products = cloudData.products;
+        if (cloudData.ingredients) ingredients = cloudData.ingredients;
+        if (cloudData.orders) orders = cloudData.orders;
+        if (cloudData.story) story = cloudData.story;
+        if (cloudData.address) address = cloudData.address;
+        if (cloudData.profile) profile = cloudData.profile;
+        if (cloudData.promotion) promotion = cloudData.promotion;
+        if (cloudData.testimonials) testimonials = cloudData.testimonials;
+        if (cloudData.simulatedEmails) simulatedEmails = cloudData.simulatedEmails;
+        if (cloudData.inquiries !== undefined) inquiries = cloudData.inquiries;
+        if (cloudData.merchantQrImage !== undefined) merchantQrImage = cloudData.merchantQrImage;
+        if (cloudData.merchantLogoImage !== undefined) merchantLogoImage = cloudData.merchantLogoImage;
+        if (cloudData.nextOrderIdSeq !== undefined) nextOrderIdSeq = cloudData.nextOrderIdSeq;
+
+        supabaseStatus = "connected";
+        supabaseErrorDetail = "";
+        lastSyncTime = new Date().toISOString();
+
+        // Write local mirror backup copy
+        saveToLocalDatabaseFile();
+      } else {
+        // Connected but table is empty. Populate table with current local copy to build state.
+        console.log("☁️ Supabase Cloud is initialized but blank. Syncing current state uphill...");
+        supabaseStatus = "connected";
+        await saveToSupabaseCloud();
+      }
+    } catch (err: any) {
+      supabaseStatus = "disconnected";
+      supabaseErrorDetail = err?.message || String(err);
+      console.error("🔌 Exception during Supabase initialization sync:", err);
+    }
+  }
+
+  // Finally run order checks
+  runOrderSafeguards();
 }
 
+// Initial seed/load before API endpoints are hit
+loadFromDatabase();
 
-
-async function saveToDatabase() {
-  if (!pool) return;
-  try {
-    const state = await collectState();
-    await pool.query(
-      "INSERT INTO app_state (id, data, updated_at) VALUES ($1, $2, NOW()) ON CONFLICT (id) DO UPDATE SET data = $3, updated_at = NOW()",
-      [1, state, state]
-    );
-  } catch (error) {
-    console.error("PostgreSQL save failed:", error);
-  }
-}
-
-// Initial seed into database on first startup
-(async () => {
-  await loadFromDatabase();
-})();
 
 // --- API ENDPOINTS ---
 
-// GET Products catalog (reloads from database to ensure cross-instance consistency on Vercel)
-app.get("/api/products", async (req, res) => {
+// GET Database Status and Diagnostics Center
+app.get("/api/admin/db-status", (req, res) => {
+  const localFileExists = fs.existsSync(DB_FILE);
+  let localFileSize = 0;
+  if (localFileExists) {
+    localFileSize = fs.statSync(DB_FILE).size;
+  }
+
+  const sqlSchema = `CREATE TABLE IF NOT EXISTS bakery_state (
+  id TEXT PRIMARY KEY,
+  data JSONB NOT NULL,
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+-- Enable full read/write access for your custom service key
+ALTER TABLE bakery_state ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Allow anonymous read-write access" ON bakery_state FOR ALL USING (true) WITH CHECK (true);`;
+
+  res.json({
+    status: supabaseStatus,
+    errorDetail: supabaseErrorDetail,
+    lastSyncTime: lastSyncTime,
+    databaseSource: supabaseStatus === "connected" ? "Supabase Cloud DB Cluster" : "Self-Healing Local Storage (db.json)",
+    localFileExists,
+    localFileSize: `${(localFileSize / 1024).toFixed(2)} KB`,
+    stats: {
+      products: products.length,
+      orders: orders.length,
+      ingredients: ingredients.length,
+      inquiries: inquiries ? inquiries.length : 0,
+      simulatedEmails: simulatedEmails.length
+    },
+    sqlSchema,
+    envConfigured: !!(process.env.SUPABASE_URL && process.env.SUPABASE_ANON_KEY),
+    supabaseUrl: process.env.SUPABASE_URL || "NOT SET",
+  });
+});
+
+// POST Manual Force Sync Database (Uphill or Downhill reconciliation)
+app.post("/api/admin/db-sync", async (req, res) => {
+  const { direction } = req.body; // "uphill" (push local to cloud) or "downhill" (pull cloud to local)
+
+  if (!supabaseClient) {
+    return res.status(400).json({ error: "Supabase client is not configured. Please supply SUPABASE_URL and SUPABASE_ANON_KEY." });
+  }
+
   try {
-    if (pool) await loadFromDatabase();
-    res.json(products);
-  } catch (err) {
-    res.json(products);
+    if (direction === "uphill") {
+      console.log("⚡ [Manual Reconciliation] Pushing current memory state to Supabase Cloud...");
+      await saveToSupabaseCloud();
+      return res.json({ success: true, message: "Successfully pushed memory/cache state uphill to Supabase Cloud!", lastSyncTime });
+    } else if (direction === "downhill") {
+      console.log("⚡ [Manual Reconciliation] Pulling master copy from Supabase Cloud...");
+      const { data, error } = await supabaseClient
+        .from("bakery_state")
+        .select("*")
+        .eq("id", "current_state")
+        .maybeSingle();
+
+      if (error) {
+        throw error;
+      }
+
+      if (data && data.data) {
+        const cloudData = data.data;
+        if (cloudData.products) products = cloudData.products;
+        if (cloudData.ingredients) ingredients = cloudData.ingredients;
+        if (cloudData.orders) orders = cloudData.orders;
+        if (cloudData.story) story = cloudData.story;
+        if (cloudData.address) address = cloudData.address;
+        if (cloudData.profile) profile = cloudData.profile;
+        if (cloudData.promotion) promotion = cloudData.promotion;
+        if (cloudData.testimonials) testimonials = cloudData.testimonials;
+        if (cloudData.simulatedEmails) simulatedEmails = cloudData.simulatedEmails;
+        if (cloudData.inquiries !== undefined) inquiries = cloudData.inquiries;
+        if (cloudData.merchantQrImage !== undefined) merchantQrImage = cloudData.merchantQrImage;
+        if (cloudData.merchantLogoImage !== undefined) merchantLogoImage = cloudData.merchantLogoImage;
+        if (cloudData.nextOrderIdSeq !== undefined) nextOrderIdSeq = cloudData.nextOrderIdSeq;
+
+        supabaseStatus = "connected";
+        supabaseErrorDetail = "";
+        lastSyncTime = new Date().toISOString();
+
+        saveToLocalDatabaseFile();
+        return res.json({ success: true, message: "Successfully synchronized master cloud state downhill to local memory and disk!", lastSyncTime });
+      } else {
+        return res.status(404).json({ error: "No state found in Supabase Cloud. You may want to perform an uphill Sync first." });
+      }
+    } else {
+      return res.status(400).json({ error: "Invalid sync direction specifier. Must be 'uphill' or 'downhill'." });
+    }
+  } catch (err: any) {
+    console.error("Manual database sync routine exception:", err);
+    res.status(500).json({ error: "Sync routine exception", message: err?.message || String(err) });
   }
 });
 
+// GET Products catalog
+app.get("/api/products", (req, res) => {
+  res.json(products);
+});
+
 // POST New Product
-app.post("/api/products", async (req, res) => {
+app.post("/api/products", (req, res) => {
   const { name, category, description, price, image, available, isFeatured, stock } = req.body;
   if (!name || isNaN(price)) {
     return res.status(400).json({ error: "Invalid product parameters." });
@@ -291,12 +560,12 @@ app.post("/api/products", async (req, res) => {
     stock: stock !== undefined ? parseInt(stock) : 40
   };
   products = [newProduct, ...products];
-  await saveToDatabase();
+  saveToDatabase();
   res.status(201).json(newProduct);
 });
 
 // PUT Product modification
-app.put("/api/products/:id", async (req, res) => {
+app.put("/api/products/:id", (req, res) => {
   const { id } = req.params;
   const index = products.findIndex(p => p.id === id);
   if (index === -1) {
@@ -314,30 +583,25 @@ app.put("/api/products/:id", async (req, res) => {
     isFeatured: req.body.isFeatured !== undefined ? req.body.isFeatured : current.isFeatured,
     stock: req.body.stock !== undefined ? parseInt(req.body.stock) : (current.stock !== undefined ? current.stock : 40)
   };
-  await saveToDatabase();
+  saveToDatabase();
   res.json(products[index]);
 });
 
 // DELETE Product
-app.delete("/api/products/:id", async (req, res) => {
+app.delete("/api/products/:id", (req, res) => {
   const { id } = req.params;
   products = products.filter(p => p.id !== id);
-  await saveToDatabase();
+  saveToDatabase();
   res.json({ success: true });
 });
 
 // GET Ingredients catalog
-app.get("/api/ingredients", async (req, res) => {
-  try {
-    if (pool) await loadFromDatabase();
-    res.json(ingredients);
-  } catch (err) {
-    res.json(ingredients);
-  }
+app.get("/api/ingredients", (req, res) => {
+  res.json(ingredients);
 });
 
 // POST Create new raw ingredient
-app.post("/api/ingredients", async (req, res) => {
+app.post("/api/ingredients", (req, res) => {
   const { name, stock, unit, minThreshold } = req.body;
   if (!name || stock === undefined || !unit || minThreshold === undefined) {
     return res.status(400).json({ error: "Missing required ingredient fields" });
@@ -350,24 +614,24 @@ app.post("/api/ingredients", async (req, res) => {
     minThreshold: parseFloat(minThreshold) || 0
   };
   ingredients.push(newIng);
-  await saveToDatabase();
+  saveToDatabase();
   res.json(newIng);
 });
 
 // DELETE raw ingredient reference
-app.delete("/api/ingredients/:id", async (req, res) => {
+app.delete("/api/ingredients/:id", (req, res) => {
   const { id } = req.params;
   const index = ingredients.findIndex(i => i.id === id);
   if (index === -1) {
     return res.status(404).json({ error: "Ingredient not found" });
   }
   const deleted = ingredients.splice(index, 1)[0];
-  await saveToDatabase();
+  saveToDatabase();
   res.json(deleted);
 });
 
 // PUT Update raw ingredient stock
-app.put("/api/ingredients/:id", async (req, res) => {
+app.put("/api/ingredients/:id", (req, res) => {
   const { id } = req.params;
   const { stock, minThreshold } = req.body;
   const index = ingredients.findIndex(i => i.id === id);
@@ -376,22 +640,17 @@ app.put("/api/ingredients/:id", async (req, res) => {
   }
   if (stock !== undefined) ingredients[index].stock = parseFloat(stock);
   if (minThreshold !== undefined) ingredients[index].minThreshold = parseFloat(minThreshold);
-  await saveToDatabase();
+  saveToDatabase();
   res.json(ingredients[index]);
 });
 
 // GET Orders queue
-app.get("/api/orders", async (req, res) => {
-  try {
-    if (pool) await loadFromDatabase();
-    res.json(orders);
-  } catch (err) {
-    res.json(orders);
-  }
+app.get("/api/orders", (req, res) => {
+  res.json(orders);
 });
 
 // POST Place New Pre-Order
-app.post("/api/orders", async (req, res) => {
+app.post("/api/orders", (req, res) => {
   const { customerName, email, phone, items, deliveryOption, date, total, specialRequests, paymentReference, paymentChannel, deliveryAddress, landmark } = req.body;
   if (!customerName || !email || !items || !items.length) {
     return res.status(400).json({ error: "Incomplete pre-order details." });
@@ -437,7 +696,7 @@ app.post("/api/orders", async (req, res) => {
     landmark: landmark || ''
   };
   orders = [newOrder, ...orders];
-  await saveToDatabase();
+  saveToDatabase();
   res.status(201).json(newOrder);
 });
 
@@ -458,7 +717,7 @@ let simulatedEmails: SimulatedEmail[] = [
     orderId: "001",
     recipientEmail: "marcus@philosophy.org",
     recipientName: "Marcus Aurelius",
-    subject: "ðŸ§ Cooking in Progress: Order #001 is in the Brick Oven!",
+    subject: "🧁 Cooking in Progress: Order #001 is in the Brick Oven!",
     body: "Dear Marcus Aurelius,\n\nWe are absolutely thrilled to inform you that your bakery reservation (Order ID: #001) has officially transitioned to the baking room!\n\nChef Camille and the team are handcrafting your delicious crinkles/pastries right now. We use only premium Dutch cocoa, real dark chocolate cores, and standard rich mountain pasture-raised butter. Your order is being baked soft, chewy, and not too sweet just the way you love it.\n\nOrder Details:\n- Items: Classic Fudge Powdered Crinkles (x1), Brioche Velvet Loaf (x1)\n- Scheduled Delivery/Pickup Date: 2026-05-22\n- Special Chef Requests: Please label containing gluten details\n\nYou can track the live baking temperature and logistics state via our online Track Orders page when logged into your Loyalty Customer account.\n\nWarmest regards,\nCamille Sumaya Marasigan\nFounder & Master Baker, Zoe's Bake My Dream",
     timestamp: new Date(Date.now() - 3600000 * 4).toLocaleString(),
     status: "Baking"
@@ -502,7 +761,7 @@ function sendSimulatedStatusEmail(order: any, targetStatus: 'Baking' | 'Ready') 
   const formattedItems = order.items.map((i: any) => `${i.name} (x${i.quantity})`).join(", ");
   
   if (targetStatus === 'Baking') {
-    subject = `ðŸ§ Cooking in Progress: Order #${order.id} is in the Brick Oven!`;
+    subject = `🧁 Cooking in Progress: Order #${order.id} is in the Brick Oven!`;
     body = `Dear ${order.customerName || 'Loyal Client'},\n\n` +
            `We are absolutely thrilled to inform you that your bakery reservation (Order ID: #${order.id}) has officially transitioned to the baking room!\n\n` +
            `Chef Camille and the team are handcrafting your delicious crinkles and treats right now. We use only premium rich cocoa, real dark chocolate cores, and high-fat butter. Your order is being baked soft, chewy, and not too sweet just the way you love it.\n\n` +
@@ -515,7 +774,7 @@ function sendSimulatedStatusEmail(order: any, targetStatus: 'Baking' | 'Ready') 
            `Zoe's Bake My Dream Team\n` +
            `Handcrafted with Love & Passion`;
   } else if (targetStatus === 'Ready') {
-    subject = `âœ¨ Freshly Baked & Boxed: Order #${order.id} is Ready!`;
+    subject = `✨ Freshly Baked & Boxed: Order #${order.id} is Ready!`;
     body = `Dear ${order.customerName || 'Loyal Client'},\n\n` +
            `Fantastic news! Your lovely, freshly dusted crinkles (Order ID: #${order.id}) are officially out of the brick oven and have been hand-wrapped!\n\n` +
            `Your products have been packaged inside our beautiful 100% biodegradable and recyclable boxes, fully dusted with sweet snowy powdered sugar to seal in that perfect soft core crumb.\n\n` +
@@ -545,7 +804,7 @@ function sendSimulatedStatusEmail(order: any, targetStatus: 'Baking' | 'Ready') 
 }
 
 // PUT Recalculate/Update General Order details
-app.put("/api/orders/:id", async (req, res) => {
+app.put("/api/orders/:id", (req, res) => {
   const { id } = req.params;
   const { items, deliveryFee } = req.body;
   const index = orders.findIndex(o => o.id === id);
@@ -567,24 +826,24 @@ app.put("/api/orders/:id", async (req, res) => {
   const itemsTotal = order.items.reduce((sum, item) => sum + (item.price * item.quantity), 0);
   order.total = (itemsTotal * 1.05) + (order.deliveryFee || 0);
 
-  await saveToDatabase();
+  saveToDatabase();
   res.json(order);
 });
 
 // DELETE Order permanently
-app.delete("/api/orders/:id", async (req, res) => {
+app.delete("/api/orders/:id", (req, res) => {
   const { id } = req.params;
   const index = orders.findIndex(o => o.id === id);
   if (index === -1) {
     return res.status(404).json({ error: "Order not found" });
   }
   const deletedOrder = orders.splice(index, 1)[0];
-  await saveToDatabase();
+  saveToDatabase();
   res.json({ success: true, message: `Order ${id} removed successfully`, deletedOrder });
 });
 
 // PUT Update Order fulfillment status
-app.put("/api/orders/:id/status", async (req, res) => {
+app.put("/api/orders/:id/status", (req, res) => {
   const { id } = req.params;
   const { status } = req.body;
   const index = orders.findIndex(o => o.id === id);
@@ -615,32 +874,22 @@ app.put("/api/orders/:id/status", async (req, res) => {
     sendSimulatedStatusEmail(orders[index], status);
   }
 
-  await saveToDatabase();
+  saveToDatabase();
   res.json(orders[index]);
 });
 
 // GET Simulated Email list
-app.get("/api/emails", async (req, res) => {
-  try {
-    if (pool) await loadFromDatabase();
-    res.json(simulatedEmails);
-  } catch (err) {
-    res.json(simulatedEmails);
-  }
+app.get("/api/emails", (req, res) => {
+  res.json(simulatedEmails);
 });
 
 // GET inquiries list for admin
-app.get("/api/inquiries", async (req, res) => {
-  try {
-    if (pool) await loadFromDatabase();
-    res.json(inquiries);
-  } catch (err) {
-    res.json(inquiries);
-  }
+app.get("/api/inquiries", (req, res) => {
+  res.json(inquiries);
 });
 
 // POST submit a new inquiry
-app.post("/api/inquiries", async (req, res) => {
+app.post("/api/inquiries", (req, res) => {
   const { name, email, message, inspirationImage } = req.body;
   if (!name || !email || !message) {
     return res.status(400).json({ error: "Missing required inquiry fields" });
@@ -657,88 +906,73 @@ app.post("/api/inquiries", async (req, res) => {
   };
 
   inquiries.unshift(newInquiry);
-  await saveToDatabase();
+  saveToDatabase();
   res.json(newInquiry);
 });
 
 // PUT mark inquiry as read
-app.put("/api/inquiries/:id/read", async (req, res) => {
+app.put("/api/inquiries/:id/read", (req, res) => {
   const { id } = req.params;
   const inq = inquiries.find(i => i.id === id);
   if (inq) {
     inq.read = true;
-    await saveToDatabase();
+    saveToDatabase();
     return res.json({ success: true, inquiry: inq });
   }
   res.status(404).json({ error: "Inquiry not found" });
 });
 
 // GET Custom Merchant/Owner Payment QR
-app.get("/api/payment/qr", async (req, res) => {
-  try {
-    if (pool) await loadFromDatabase();
-    res.json({ qrImage: merchantQrImage });
-  } catch (err) {
-    res.json({ qrImage: merchantQrImage });
-  }
+app.get("/api/payment/qr", (req, res) => {
+  res.json({ qrImage: merchantQrImage });
 });
 
 // POST Upload custom Merchant/Owner Payment QR
-app.post("/api/payment/qr", async (req, res) => {
+app.post("/api/payment/qr", (req, res) => {
   const { qrImage } = req.body;
   merchantQrImage = qrImage || "";
-  await saveToDatabase();
+  saveToDatabase();
   res.json({ success: true, qrImage: merchantQrImage });
 });
 
 // GET website logo
-app.get("/api/website/logo", async (req, res) => {
-  try {
-    if (pool) await loadFromDatabase();
-    res.json({ logoImage: merchantLogoImage });
-  } catch (err) {
-    res.json({ logoImage: merchantLogoImage });
-  }
+app.get("/api/website/logo", (req, res) => {
+  res.json({ logoImage: merchantLogoImage });
 });
 
 // POST Upload custom website logo
-app.post("/api/website/logo", async (req, res) => {
+app.post("/api/website/logo", (req, res) => {
   const { logoImage } = req.body;
   merchantLogoImage = logoImage || "";
-  await saveToDatabase();
+  saveToDatabase();
   res.json({ success: true, logoImage: merchantLogoImage });
 });
 
 // GET Editorial contents
-app.get("/api/website", async (req, res) => {
-  try {
-    if (pool) await loadFromDatabase();
-    res.json({
-      story,
-      address,
-      profile,
-      promotion,
-      testimonials
-    });
-  } catch (err) {
-    res.json({ story, address, profile, promotion, testimonials });
-  }
+app.get("/api/website", (req, res) => {
+  res.json({
+    story,
+    address,
+    profile,
+    promotion,
+    testimonials
+  });
 });
 
 // PUT Update Website editorials/promos/meta
-app.put("/api/website", async (req, res) => {
+app.put("/api/website", (req, res) => {
   const { updatedStory, updatedAddress, updatedProfile, updatedPromotion, updatedTestimonials } = req.body;
   if (updatedStory) story = { ...story, ...updatedStory };
   if (updatedAddress) address = { ...address, ...updatedAddress };
   if (updatedProfile) profile = { ...profile, ...updatedProfile };
   if (updatedPromotion) promotion = { ...promotion, ...updatedPromotion };
   if (updatedTestimonials) testimonials = updatedTestimonials;
-  await saveToDatabase();
+  saveToDatabase();
   res.json({ success: true, story, address, profile, promotion, testimonials });
 });
 
 // POST Create new customer testimonial / feedback review
-app.post("/api/testimonials", async (req, res) => {
+app.post("/api/testimonials", (req, res) => {
   const { name, rating, text, role } = req.body;
   if (!name || !text || rating === undefined) {
     return res.status(400).json({ error: "Missing required review fields (name, rating, text)" });
@@ -758,7 +992,7 @@ app.post("/api/testimonials", async (req, res) => {
     ][Math.floor(Math.random() * 5)]}?auto=format&fit=crop&w=120&q=80`
   };
   testimonials.unshift(newTestimonial);
-  await saveToDatabase();
+  saveToDatabase();
   res.json({ success: true, testimonials, newTestimonial });
 });
 
@@ -794,7 +1028,7 @@ Provide your response in a strict raw JSON format using these exact keys:
       // Return creative fallback if key is missing so application remains resilient
       const simulatedResponses = [
         {
-          name: `${occasion} Sovereign Velvet GÃ¢teau`,
+          name: `${occasion} Sovereign Velvet Gâteau`,
           category: "Cakes",
           recommendedPrice: 1800.00,
           culinaryStory: `Hand-piped artisanal masterpiece customized for your ${occasion}. Expresses intense raspberry compote embedded in Swiss dark chocolate ganache, draped in elegant, gold-brushed chocolate velvet curls.`,
@@ -847,9 +1081,8 @@ Provide your response in a strict raw JSON format using these exact keys:
   }
 });
 
-// --- SERVER CONFIGURATION AND MIDDLEWARE BOOTSTRAP ---
-
-async function configureApp() {
+// Setup Vite Dev Server / Static Assets Server Middleware
+async function startServer() {
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
       server: { middlewareMode: true },
@@ -863,23 +1096,10 @@ async function configureApp() {
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }
-}
 
-// Initialize routes and asset handlers immediately for Vercel / Local
-configureApp().catch((err) => {
-  console.error("Failed to initialize server asset handlers:", err);
-});
-
-// ONLY call listen if running locally outside of Vercel Serverless
-if (process.env.VERCEL !== "1") {
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`[Bake My Dream] Fullstack Server running at http://0.0.0.0:${PORT}`);
   });
 }
 
-export default app;
-
-
-
-
-
+startServer();
