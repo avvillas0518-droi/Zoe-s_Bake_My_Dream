@@ -1132,6 +1132,16 @@ Provide your response in a strict raw JSON format using these exact keys:
   }
 });
 
+// Global Error Handler Middleware to prevent generic 500s and log useful details
+app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+  console.error("🚨 Express Global Error Caught:", err);
+  res.status(500).json({
+    error: "Internal Server Error",
+    message: err?.message || String(err),
+    stack: process.env.NODE_ENV !== "production" ? err?.stack : undefined
+  });
+});
+
 // Setup Vite Dev Server / Static Assets Server Middleware
 async function startServer() {
   if (process.env.NODE_ENV !== "production") {
