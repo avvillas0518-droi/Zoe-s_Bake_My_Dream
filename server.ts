@@ -1,6 +1,5 @@
 import express from "express";
 import path from "path";
-import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, Type } from "@google/genai";
 import dns from "dns";
 import fs from "fs";
@@ -271,25 +270,31 @@ let inquiries: Inquiry[] = [
 
 // --- JSON Persistence implementation ---
 const DB_FILE = (() => {
-  if (process.env.VERCEL) {
-    const tmpPath = path.join("/tmp", "db.json");
-    if (!fs.existsSync(tmpPath)) {
-      const bundledPath = path.join(process.cwd(), "db.json");
-      if (fs.existsSync(bundledPath)) {
-        try {
-          fs.copyFileSync(bundledPath, tmpPath);
-          console.log("💾 Seeded writable /tmp/db.json from bundled database cache.");
-        } catch (e) {
-          console.warn("Could not copy bundled db.json to /tmp:", e);
+  try {
+    if (process.env.VERCEL) {
+      const tmpPath = path.join("/tmp", "db.json");
+      if (!fs.existsSync(tmpPath)) {
+        const bundledPath = path.join(process.cwd(), "db.json");
+        if (fs.existsSync(bundledPath)) {
+          try {
+            fs.copyFileSync(bundledPath, tmpPath);
+            console.log("💾 Seeded writable /tmp/db.json from bundled database cache.");
+          } catch (e) {
+            console.warn("Could not copy bundled db.json to /tmp:", e);
+          }
         }
       }
+      return tmpPath;
     }
-    return tmpPath;
+    return path.join(process.cwd(), "db.json");
+  } catch (err) {
+    console.warn("⚠️ Bypassed DB_FILE generation during Vercel module load:", err);
+    return "";
   }
-  return path.join(process.cwd(), "db.json");
 })();
 
 function saveToLocalDatabaseFile() {
+  if (!DB_FILE) return;
   try {
     const data = {
       products,
@@ -412,7 +417,7 @@ function runOrderSafeguards() {
 async function loadFromDatabase() {
   // First, baseline read from local db.json to ensure fastest start
   try {
-    if (fs.existsSync(DB_FILE)) {
+    if (DB_FILE && fs.existsSync(DB_FILE)) {
       const dbContent = fs.readFileSync(DB_FILE, "utf-8").trim();
       if (dbContent) {
         const data = JSON.parse(dbContent);
@@ -503,8 +508,36 @@ async function loadFromDatabase() {
   runOrderSafeguards();
 }
 
-// Initial seed/load before API endpoints are hit
-loadFromDatabase();
+// Lazy database initialization for Vercel Serverless environment
+let isDatabaseStateLoaded = false;
+let databaseLoadPromise: Promise<void> | null = null;
+
+async function ensureDatabaseLoaded() {
+  if (isDatabaseStateLoaded) return;
+  if (!databaseLoadPromise) {
+    databaseLoadPromise = (async () => {
+      try {
+        await loadFromDatabase();
+        isDatabaseStateLoaded = true;
+      } catch (err) {
+        console.error("🚨 Error in lazy database load handler:", err);
+      }
+    })();
+  }
+  await databaseLoadPromise;
+}
+
+// Global middleware to await DB load for all API requests
+app.use(async (req, res, next) => {
+  if (req.path.startsWith("/api")) {
+    try {
+      await ensureDatabaseLoaded();
+    } catch (err) {
+      console.error("🚨 Database load deferred error in request context:", err);
+    }
+  }
+  next();
+});
 
 
 // --- API ENDPOINTS ---
@@ -1102,6 +1135,7 @@ Provide your response in a strict raw JSON format using these exact keys:
 // Setup Vite Dev Server / Static Assets Server Middleware
 async function startServer() {
   if (process.env.NODE_ENV !== "production") {
+    const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
