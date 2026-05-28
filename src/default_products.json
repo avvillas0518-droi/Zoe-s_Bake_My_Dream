@@ -1,0 +1,233 @@
+[
+  {
+    "id": "prod-cakes-1",
+    "name": "Berry Melon Cupcakes",
+    "category": "Cakes",
+    "description": "Delicate vanilla cupcakes topped with vibrant berry mousse and a touch of melon essence.",
+    "price": 500,
+    "image": "https://images.unsplash.com/photo-1576618148400-f54bed99fcfd?auto=format&fit=crop&w=600&h=450&q=80",
+    "available": true,
+    "isFeatured": true,
+    "stock": 45
+  },
+  {
+    "id": "prod-cakes-2",
+    "name": "Bridal Cake",
+    "category": "Cakes",
+    "description": "A majestic multi-tier elegant blue and cream cake, decorated with gold leaf and edible pearls.",
+    "price": 1000,
+    "image": "https://images.unsplash.com/photo-1535141192574-5d4897c13636?auto=format&fit=crop&w=600&h=450&q=80",
+    "available": true,
+    "isFeatured": true,
+    "stock": 10
+  },
+  {
+    "id": "prod-cakes-3",
+    "name": "Dark Moist Cake",
+    "category": "Cakes",
+    "description": "Luxuriously rich chocolate devil's food cake, enveloped in a smooth dark chocolate ganache and chocolate curls.",
+    "price": 1300,
+    "image": "https://images.unsplash.com/photo-1606313564200-e75d5e30476c?auto=format&fit=crop&w=600&h=450&q=80",
+    "available": true,
+    "isFeatured": true,
+    "stock": 15
+  },
+  {
+    "id": "prod-cakes-4",
+    "name": "Heart Shape Ribbons",
+    "category": "Cakes",
+    "description": "Charming heart-shaped vintage piped pink cake, adorned with elegant black silk ribbons.",
+    "price": 1000,
+    "image": "https://images.unsplash.com/photo-1519869325930-281384150729?auto=format&fit=crop&w=600&h=450&q=80",
+    "available": true,
+    "isFeatured": false,
+    "stock": 8
+  },
+  {
+    "id": "prod-cakes-5",
+    "name": "Mermaid Cupcakes",
+    "category": "Cakes",
+    "description": "Whimsical teal and purple swirled buttercream cupcakes topped with beautiful mermaid tails and sea dust.",
+    "price": 500,
+    "image": "https://images.unsplash.com/photo-1550617931-e17a7b70dce2?auto=format&fit=crop&w=600&h=450&q=80",
+    "available": true,
+    "isFeatured": false,
+    "stock": 25
+  },
+  {
+    "id": "prod-cakes-6",
+    "name": "Midnight Daisy",
+    "category": "Cakes",
+    "description": "A striking matte dark chocolate frosting cake, meticulously decorated with delicate white chamomile daisies.",
+    "price": 1000,
+    "image": "https://images.unsplash.com/photo-1588195538326-c5b1e9f80a1b?auto=format&fit=crop&w=600&h=450&q=80",
+    "available": true,
+    "isFeatured": true,
+    "stock": 12
+  },
+  {
+    "id": "prod-cakes-7",
+    "name": "Number Cupcakes",
+    "category": "Cakes",
+    "description": "Bespoke cupcakes meticulously arranged in custom digit displays for anniversaries and birthdays.",
+    "price": 500,
+    "image": "https://images.unsplash.com/photo-1614707267537-b85acf00c4b8?auto=format&fit=crop&w=600&h=450&q=80",
+    "available": true,
+    "isFeatured": false,
+    "stock": 20
+  },
+  {
+    "id": "prod-cakes-8",
+    "name": "Pastel Blossom and Cupcake Platter",
+    "category": "Cakes",
+    "description": "A grand combination of a matching mini birthday cake and custom-decorated buttercream blossom cupcakes.",
+    "price": 1500,
+    "image": "https://images.unsplash.com/photo-1464305795204-6f5bdf7f8139?auto=format&fit=crop&w=600&h=450&q=80",
+    "available": true,
+    "isFeatured": false,
+    "stock": 5
+  },
+  {
+    "id": "prod-cakes-9",
+    "name": "Pink Blossom Drip",
+    "category": "Cakes",
+    "description": "Whimsical white-frosted cake with a dreamy pink pastel drip, topped with fresh meringue blossoms.",
+    "price": 1000,
+    "image": "https://images.unsplash.com/photo-1563729784474-d77dbb933a9e?auto=format&fit=crop&w=600&h=450&q=80",
+    "available": true,
+    "isFeatured": false,
+    "stock": 10
+  },
+  {
+    "id": "prod-cakes-10",
+    "name": "Pink Pearl Cupcakes",
+    "category": "Cakes",
+    "description": "Scrumptious pink velvet cupcakes, piped with premium pink cream cheese frosting and pearl details.",
+    "price": 500,
+    "image": "https://images.unsplash.com/photo-1519869325930-281384150729?auto=format&fit=crop&w=600&h=450&q=80",
+    "available": true,
+    "isFeatured": false,
+    "stock": 40
+  },
+  {
+    "id": "prod-cakes-11",
+    "name": "Sacred Grace Blossom",
+    "category": "Cakes",
+    "description": "An elegant, peaceful communion or wedding cake decorated with a gold cross and fresh spring blossoms.",
+    "price": 1000,
+    "image": "https://images.unsplash.com/photo-1535254973040-607b474cb50d?auto=format&fit=crop&w=600&h=450&q=80",
+    "available": true,
+    "isFeatured": true,
+    "stock": 6
+  },
+  {
+    "id": "prod-cakes-12",
+    "name": "Triple Truple Chocolate",
+    "category": "Cakes",
+    "description": "A chocolate lover's dream featuring a triple layer of dark, milk, and white chocolate ganache.",
+    "price": 1000,
+    "image": "https://images.unsplash.com/photo-1606313564200-e75d5e30476c?auto=format&fit=crop&w=600&h=450&q=80",
+    "available": true,
+    "isFeatured": true,
+    "stock": 14
+  },
+  {
+    "id": "prod-crinkles-1",
+    "name": "Choco Lava with Biscoff",
+    "category": "Crinkles",
+    "description": "Chewy double chocolate crinkles with a molten center, topped with crunchy Lotus Biscoff speculoos.",
+    "price": 150,
+    "image": "https://images.unsplash.com/photo-1551024506-0bccd828d307?auto=format&fit=crop&w=600&h=450&q=80",
+    "available": true,
+    "isFeatured": true,
+    "stock": 120
+  },
+  {
+    "id": "prod-crinkles-2",
+    "name": "Classic Choco",
+    "category": "Crinkles",
+    "description": "Fudgy, melt-in-your-mouth crinkle cookies generously rolled in powdered sugar dust.",
+    "price": 150,
+    "image": "https://images.unsplash.com/photo-1558961309-dbdf000a1291?auto=format&fit=crop&w=600&h=450&q=80",
+    "available": true,
+    "isFeatured": false,
+    "stock": 200
+  },
+  {
+    "id": "prod-crinkles-3",
+    "name": "Classic Matcha",
+    "category": "Crinkles",
+    "description": "Uji matcha green tea crinkles with a brilliant jade color and a perfect powdered exterior.",
+    "price": 150,
+    "image": "https://images.unsplash.com/photo-1536256263959-770b48d82b0a?auto=format&fit=crop&w=600&h=450&q=80",
+    "available": true,
+    "isFeatured": true,
+    "stock": 100
+  },
+  {
+    "id": "prod-crinkles-4",
+    "name": "Matcha Lava",
+    "category": "Crinkles",
+    "description": "Green tea matcha crinkles oozing with a rich white-chocolate matcha molten cream center.",
+    "price": 150,
+    "image": "https://images.unsplash.com/photo-1619860860774-1e2e17343432?auto=format&fit=crop&w=600&h=450&q=80",
+    "available": true,
+    "isFeatured": false,
+    "stock": 80
+  },
+  {
+    "id": "prod-crinkles-5",
+    "name": "Matcha Lava with Biscoff",
+    "category": "Crinkles",
+    "description": "Matcha lava crinkles flavored with Lotus Biscoff speculoos crumbs for a caramel spice twist.",
+    "price": 150,
+    "image": "https://images.unsplash.com/photo-1574085733277-851d9d856a3a?auto=format&fit=crop&w=600&h=450&q=80",
+    "available": true,
+    "isFeatured": false,
+    "stock": 90
+  },
+  {
+    "id": "prod-bread-1",
+    "name": "Cinnamon with Yema Filling",
+    "category": "Bread",
+    "description": "Soft, freshly rolled sweet dough rolls filled with cinnamon and gooey, local Filipino Yema custard.",
+    "price": 50,
+    "image": "https://images.unsplash.com/photo-1509440159596-0249088772ff?auto=format&fit=crop&w=600&h=450&q=80",
+    "available": true,
+    "isFeatured": true,
+    "stock": 50
+  },
+  {
+    "id": "prod-bread-2",
+    "name": "Cream Cheeze Garlic",
+    "category": "Bread",
+    "description": "Garlicky buns stuffed with sweetened cream cheese and dipped in savory salted garlic butter.",
+    "price": 50,
+    "image": "https://images.unsplash.com/photo-1549931319-a545dcf3bc73?auto=format&fit=crop&w=600&h=450&q=80",
+    "available": true,
+    "isFeatured": true,
+    "stock": 60
+  },
+  {
+    "id": "prod-bread-3",
+    "name": "Garlic Bread Supremacy",
+    "category": "Bread",
+    "description": "Crisp toasted french bread slathered with extra rich butter-garlic spread, herbs, and parmesan.",
+    "price": 35,
+    "image": "https://images.unsplash.com/photo-1573145959534-1b32d061f5df?auto=format&fit=crop&w=600&h=450&q=80",
+    "available": true,
+    "isFeatured": false,
+    "stock": 120
+  },
+  {
+    "id": "prod-bread-4",
+    "name": "Korean Garlic",
+    "category": "Bread",
+    "description": "Famous pull-apart flower sweet buns stuffed with sweet cream cheese and drenched in premium savory garlic glaze.",
+    "price": 50,
+    "image": "https://images.unsplash.com/photo-1628115619163-e3c3b0dfb2f2?auto=format&fit=crop&w=600&h=450&q=80",
+    "available": true,
+    "isFeatured": true,
+    "stock": 75
+  }
+]

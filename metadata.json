@@ -1,0 +1,8 @@
+{
+  "name": "Zoe’s Bakehouse",
+  "description": "An exquisite full-stack artisanal bakery catalog, interactive pre-order reservation queue, and custom celebration cake co-designer assistant powered by Gemini 3.5-Flash.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
