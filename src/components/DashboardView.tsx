@@ -277,9 +277,58 @@ export default function DashboardView({
 
   const convertToBase64 = (file: File): Promise<string> => {
     return new Promise((resolve, reject) => {
+      // If it's not a standard image file, use original FileReader fallback immediately
+      if (!file.type.startsWith("image/")) {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result as string);
+        reader.onerror = (error) => reject(error);
+        reader.readAsDataURL(file);
+        return;
+      }
+
       const reader = new FileReader();
       reader.readAsDataURL(file);
-      reader.onload = () => resolve(reader.result as string);
+      reader.onload = (event) => {
+        const img = new Image();
+        img.src = event.target?.result as string;
+        img.onload = () => {
+          const canvas = document.createElement("canvas");
+          const ctx = canvas.getContext("2d");
+          if (!ctx) {
+            resolve(event.target?.result as string); // context error fallback
+            return;
+          }
+
+          // Safe, responsive bounding constraints: max 720px width/height
+          const MAX_WIDTH = 720;
+          const MAX_HEIGHT = 720;
+          let width = img.width;
+          let height = img.height;
+
+          if (width > height) {
+            if (width > MAX_WIDTH) {
+              height = Math.round((height * MAX_WIDTH) / width);
+              width = MAX_WIDTH;
+            }
+          } else {
+            if (height > MAX_HEIGHT) {
+              width = Math.round((width * MAX_HEIGHT) / height);
+              height = MAX_HEIGHT;
+            }
+          }
+
+          canvas.width = width;
+          canvas.height = height;
+          ctx.drawImage(img, 0, 0, width, height);
+
+          // Export compressed JPEG base64 string at 75% visual fidelity (super compact & beautiful!)
+          const compressed = canvas.toDataURL("image/jpeg", 0.75);
+          resolve(compressed);
+        };
+        img.onerror = () => {
+          resolve(event.target?.result as string); // load failure fallback
+        };
+      };
       reader.onerror = (error) => reject(error);
     });
   };

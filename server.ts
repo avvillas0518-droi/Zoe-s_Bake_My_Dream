@@ -345,7 +345,7 @@ async function saveToSupabaseCloud() {
       });
 
     const timeoutPromise = new Promise<any>((_, reject) => {
-      setTimeout(() => reject(new Error("Supabase statement upsert timed out after 4500ms")), 4500);
+      setTimeout(() => reject(new Error("Supabase statement upsert timed out after 15000ms")), 15000);
     });
 
     const { error } = await Promise.race([
@@ -427,6 +427,7 @@ function runOrderSafeguards() {
 
 let isLocalLoaded = false;
 let isSupabaseLoaded = false;
+let lastSupabaseLoadAttemptTime = 0;
 let supabaseLoadingPromise: Promise<void> | null = null;
 
 function loadLocalBaselineSync() {
@@ -473,9 +474,11 @@ async function loadFromSupabase() {
     return supabaseLoadingPromise;
   }
 
+  lastSupabaseLoadAttemptTime = Date.now();
+
   supabaseLoadingPromise = (async () => {
     try {
-      // Create a promise with a safety timeout of 3.5 seconds
+      // Create a promise with a safety timeout of 15 seconds
       const fetchPromise = supabaseClient
         .from("bakery_state")
         .select("*")
@@ -483,7 +486,7 @@ async function loadFromSupabase() {
         .maybeSingle();
 
       const timeoutPromise = new Promise<{ data: any; error: any }>((_, reject) => {
-        setTimeout(() => reject(new Error("Supabase statement lookup timed out after 3500ms")), 3500);
+        setTimeout(() => reject(new Error("Supabase statement lookup timed out after 15000ms")), 15000);
       });
 
       const { data, error } = await Promise.race([
@@ -547,7 +550,11 @@ async function loadFromSupabase() {
 async function ensureDatabaseLoaded() {
   loadLocalBaselineSync();
   if (supabaseClient && !isSupabaseLoaded) {
-    await loadFromSupabase();
+    const now = Date.now();
+    // Throttle attempts to fetch from Supabase if we have recently failed/attempted (30s cool-off)
+    if (now - lastSupabaseLoadAttemptTime > 30000 || supabaseLoadingPromise) {
+      await loadFromSupabase();
+    }
   }
 }
 
